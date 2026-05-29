@@ -1,7 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cu132
+torch==2.12.0+cu132
+torchvision==0.27.0+cu132
 networkx
-torch
 groq
-torchvision
 torch-summary
 einops
 scikit-image
@@ -58,6 +59,5 @@ python-multipart
 google-genai
 rich
 regex
---extra-index-url https://frederik-uni.github.io/manga-image-translator-rust/python/wheels/simple/
-rusty-manga-image-translator
+rusty_manga_image_translator@https://github.com/Phobos1641/manga-image-translator-rust/releases/download/v0.13.2/rusty_manga_image_translator-0.13.2-cp39-abi3-manylinux_2_39_x86_64.whl
 python-bidi
