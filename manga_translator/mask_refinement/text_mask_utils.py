@@ -81,13 +81,13 @@ def refine_mask(rgbimg, rawmask):
     d = dcrf.DenseCRF2D(rgbimg.shape[1], rgbimg.shape[0], n_classes)
 
     d.setUnaryEnergy(unary)
-    d.addPairwiseGaussian(sxy=1, compat=3, kernel=dcrf.DIAG_KERNEL,
-                            normalization=dcrf.NO_NORMALIZATION)
+    d.addPairwiseGaussian(sxy=1, compat=3, kernel=dcrf.KernelType.DIAG_KERNEL,
+                            normalization=dcrf.NormalizationType.NO_NORMALIZATION)
 
     d.addPairwiseBilateral(sxy=23, srgb=7, rgbim=rgbimg,
                         compat=20,
-                        kernel=dcrf.DIAG_KERNEL,
-                        normalization=dcrf.NO_NORMALIZATION)
+                        kernel=dcrf.KernelType.DIAG_KERNEL,
+                        normalization=dcrf.NormalizationType.NO_NORMALIZATION)
     Q = d.inference(5)
     res = np.argmax(Q, axis=0).reshape((rgbimg.shape[0], rgbimg.shape[1]))
     crf_mask = np.array(res * 255, dtype=np.uint8)
