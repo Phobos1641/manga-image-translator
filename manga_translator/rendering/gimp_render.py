@@ -5,6 +5,7 @@ import cv2
 import platform
 import glob
 import os
+import re
 
 from ..utils import Context
 
@@ -99,6 +100,28 @@ script_template = """
 )"""
 
 
+def normalize_layer_name(s: str) -> str:
+    # Unicode ranges for common CJK blocks + Hiragana/Katakana + Hangul
+    _cjk = (
+        r"\u4E00-\u9FFF"   # CJK Unified Ideographs
+        r"\u3400-\u4DBF"   # CJK Extension A
+        r"\uF900-\uFAFF"   # CJK Compatibility Ideographs
+        r"\u3040-\u309F"   # Hiragana
+        r"\u30A0-\u30FF"   # Katakana
+        r"\uAC00-\uD7AF"   # Hangul Syllables
+    )
+
+    _re_cjk_space = re.compile(fr"(?<=([{_cjk}]))\s+(?=([{_cjk}]))")
+    _re_spaces = re.compile(r"\s+")
+
+    # 1) Remove spaces between adjacent CJK characters
+    s = _re_cjk_space.sub("", s)
+    # 2) Collapse remaining runs of whitespace to a single space
+    s = _re_spaces.sub(" ", s)
+
+    return s.strip().replace('"', '\\"')
+
+
 def gimp_render(out_file, ctx: Context):
     input_file = os.path.join(tempfile.gettempdir(), ".gimp_input.png")
     mask_file = os.path.join(tempfile.gettempdir(), ".gimp_mask.png")
@@ -137,7 +160,7 @@ def gimp_render(out_file, ctx: Context):
             text_template.format(
                 n=n,
                 color=" ".join([str(value) for value in text_region.fg_colors]),
-                name=" ".join(text_region.text).replace('"', '\\"'),
+                name=normalize_layer_name(" ".join(text_region.text)),
                 position=str(text_region.xywh[0]) + " " + str(text_region.xywh[1]),
                 size=str(text_region.xywh[2]) + " " + str(text_region.xywh[3]),
                 justify=alignment_to_justification[text_region.alignment],
