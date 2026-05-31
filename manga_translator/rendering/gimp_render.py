@@ -33,7 +33,8 @@ direction_to_base_direction = {
 #   - gimp-image-add-layer was removed; use gimp-image-insert-layer
 #     (image layer parent position). parent 0 = main stack, position 0 = top.
 #   - File procedures take a single filename (GFile), no second "raw" filename.
-#   - gimp-xcf-save / gimp-file-save take a VECTOR of drawables, not one drawable.
+#   - The save/export PDB procedures are (run-mode image file): gimp-xcf-save for
+#     .xcf, gimp-file-save (routes by extension) for other formats. No drawable.
 #   - gimp-image-get-layers returns a single array; in the default (v2) dialect
 #     that array is wrapped in a list, so (vector-ref (car ...) 0) gets a layer.
 # This script uses the default (v2) Script-Fu dialect, hence the (car ...) wraps
@@ -59,11 +60,12 @@ text_template = """
 """
 
 save_templates = {
-    "xcf": '( gimp-xcf-save RUN-NONINTERACTIVE image (vector background_layer) "{out_file}" )',
-    # gimp-file-save picks the exporter from the extension; this is the robust
-    # replacement for the renamed/reworked file-psd-save / file-pdf-save plugins.
-    "psd": '( gimp-file-save RUN-NONINTERACTIVE image (vector background_layer) "{out_file}" )',
-    "pdf": '( gimp-file-save RUN-NONINTERACTIVE image (vector background_layer) "{out_file}" )',
+    # The PDB save/export procedures take (run-mode image file) - NO drawables
+    # vector (the libgimp C wrappers have extra params, but the PDB procedures
+    # do not). gimp-file-save routes to the right exporter by file extension.
+    "xcf": '( gimp-xcf-save RUN-NONINTERACTIVE image "{out_file}" )',
+    "psd": '( gimp-file-save RUN-NONINTERACTIVE image "{out_file}" )',
+    "pdf": '( gimp-file-save RUN-NONINTERACTIVE image "{out_file}" )',
 }
 
 create_mask = '( inpainting ( car ( gimp-file-load-layer RUN-NONINTERACTIVE image "{mask_file}" ) ) )'
@@ -286,7 +288,18 @@ def gimp_batch(script, timeout=300):
     print("=== Running GIMP:")
     try:
         result = subprocess.run(
-            [gimp_console_executable(), "-i", "-b", script, "-b", "(gimp-quit 0)"],
+            [
+                gimp_console_executable(),
+                "-i",
+                # GIMP 3.0 requires the batch interpreter to be named explicitly;
+                # without it GIMP reports "No batch interpreter specified".
+                "--batch-interpreter",
+                "plug-in-script-fu-eval",
+                "-b",
+                script,
+                "-b",
+                "(gimp-quit 0)",
+            ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
