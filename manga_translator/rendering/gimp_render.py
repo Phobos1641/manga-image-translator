@@ -119,7 +119,17 @@ def normalize_layer_name(s: str) -> str:
     # 2) Collapse remaining runs of whitespace to a single space
     s = _re_spaces.sub(" ", s)
 
-    return s.strip().replace('"', '\\"')
+    s = s.strip().replace('"', '\\"')
+
+    # Script Fu freaks out if the string is too long
+    _max_string_length=379
+
+    if len(s) > _max_string_length:
+        print('=== GIMP script - pre-processing warning:\nWarning: Layer name truncated')
+        s = s[:379]
+
+    return s
+
 
 
 def gimp_render(out_file, ctx: Context):
