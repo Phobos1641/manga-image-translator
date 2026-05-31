@@ -27,7 +27,7 @@ numpy==1.26.4
 tensorboardX
 websockets
 protobuf<6.0.0,>=3.20.2 # `google-genai` dependancy requirement
-ctranslate2
+ctranslate2@https://github.com/Phobos1641/CTranslate2/releases/download/v4.7.2-cu13/ctranslate2-4.7.2-cp314-cp314-manylinux_2_34_x86_64.whl
 colorama
 openai==1.63.0
 tiktoken
