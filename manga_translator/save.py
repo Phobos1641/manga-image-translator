@@ -1,4 +1,7 @@
 import os
+import platform
+import shutil
+import functools
 from PIL import Image
 from abc import abstractmethod
 from .rendering.gimp_render import gimp_render
@@ -43,6 +46,73 @@ def save_result(result: Image.Image, dest: str, ctx: Context):
     format_handler.save(result, dest, ctx)
 
 
+# -- Helper Functions
+
+def _find_font_file(basename):
+    """Search fontconfig's known font files for one whose basename matches."""
+    if shutil.which("fc-list") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["fc-list", "--format", "%{file}\n"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line and os.path.basename(line) == basename:
+            return line
+    return None
+
+
+@functools.lru_cache(maxsize=None)
+def _resolve_font_name(font):
+    """
+    GIMP looks fonts up by family name (via fontconfig), not by filename. If
+    `font` looks like a font file (.ttf/.otf/...) and we're on Linux with
+    fontconfig available, return the family name fontconfig reports for that
+    file - this is exactly what GIMP will match. Otherwise (already a family
+    name, non-Linux, no fontconfig, or lookup fails) return `font` unchanged
+    and let the in-script resolve-font fallback handle it.
+    """
+    if not font:
+        return font
+    if platform.system() != "Linux":
+        return font
+    if not font.lower().endswith((".ttf", ".otf", ".ttc", ".otc", ".pfb")):
+        return font
+    if shutil.which("fc-scan") is None:
+        return font
+
+    # The input may be a full path or a bare filename. fc-scan needs a path.
+    path = font if os.path.isfile(font) else _find_font_file(os.path.basename(font))
+    if not path:
+        return font
+
+    try:
+        result = subprocess.run(
+            ["fc-scan", "--format", "%{family}\n", path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return font
+
+    # fc-scan may print several families (faces / localized names); the first
+    # entry on the first line is the primary family GIMP indexes it under.
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line:
+            return line.split(",")[0].strip() or font
+    return font
+
+
 # -- Format Implementations
 
 class ImageFormat(ExportFormat):
@@ -63,7 +133,10 @@ class GIMPFormat(ExportFormat):
     SUPPORTED_FORMATS = ['xcf', 'psd', 'pdf']
 
     def _save(self, result: Image.Image, dest: str, ctx: Context):
-        gimp_render(dest, ctx)
+        gimpCtx = ctx
+        gimpCtx.gimp_font = _resolve_font_name(ctx.gimp_font)
+
+        gimp_render(dest, gimpCtx)
 
 # class KraFormat(ExportFormat):
 #     SUPPORTED_FORMATS = ['kra']
