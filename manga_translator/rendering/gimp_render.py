@@ -279,6 +279,11 @@ def gimp_batch(script, timeout=300):
     running idle as a background process, so this call would otherwise block
     forever. stdin is also detached so GIMP can never block waiting on it.
     """
+
+    print("=== Running GIMP script:")
+    print(script)
+
+    print("=== Running GIMP:")
     try:
         result = subprocess.run(
             [gimp_console_executable(), "-i", "-b", script, "-b", "(gimp-quit 0)"],
