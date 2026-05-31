@@ -5,6 +5,8 @@ import cv2
 import platform
 import glob
 import os
+import shutil
+import functools
 
 from ..utils import Context
 
@@ -97,11 +99,81 @@ script_template = """
 )"""
 
 
+def _find_font_file(basename):
+    """Search fontconfig's known font files for one whose basename matches."""
+    if shutil.which("fc-list") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["fc-list", "--format", "%{file}\n"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line and os.path.basename(line) == basename:
+            return line
+    return None
+
+
+@functools.lru_cache(maxsize=None)
+def _resolve_font_name(font):
+    """
+    GIMP looks fonts up by family name (via fontconfig), not by filename. If
+    `font` looks like a font file (.ttf/.otf/...) and we're on Linux with
+    fontconfig available, return the family name fontconfig reports for that
+    file - this is exactly what GIMP will match. Otherwise (already a family
+    name, non-Linux, no fontconfig, or lookup fails) return `font` unchanged
+    and let the in-script resolve-font fallback handle it.
+    """
+    if not font:
+        return font
+    if platform.system() != "Linux":
+        return font
+    if not font.lower().endswith((".ttf", ".otf", ".ttc", ".otc", ".pfb")):
+        return font
+    if shutil.which("fc-scan") is None:
+        return font
+
+    # The input may be a full path or a bare filename. fc-scan needs a path.
+    path = font if os.path.isfile(font) else _find_font_file(os.path.basename(font))
+    if not path:
+        return font
+
+    try:
+        result = subprocess.run(
+            ["fc-scan", "--format", "%{family}\n", path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return font
+
+    # fc-scan may print several families (faces / localized names); the first
+    # entry on the first line is the primary family GIMP indexes it under.
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line:
+            return line.split(",")[0].strip() or font
+    return font
+
+
 def gimp_render(out_file, ctx: Context):
     input_file = os.path.join(tempfile.gettempdir(), ".gimp_input.png")
     mask_file = os.path.join(tempfile.gettempdir(), ".gimp_mask.png")
 
     extension = out_file.split(".")[-1]
+
+    # If gimp_font was given as a .ttf/.otf file, resolve it to the family name
+    # GIMP actually knows it by (see _resolve_font_name). No-op if it's already
+    # a family name or fontconfig isn't available.
+    gimp_font = _resolve_font_name(ctx.gimp_font)
 
     ctx.upscaled.save(input_file)
 
@@ -122,7 +194,7 @@ def gimp_render(out_file, ctx: Context):
                 n=n,
                 text=text_region.translation.replace('"', '\\"'),
                 text_size=text_region.font_size,
-                default_font=ctx.gimp_font
+                default_font=gimp_font
                 + (" Bold" if text_region.bold else "")
                 + (" Italic" if text_region.italic else ""),
             )
@@ -139,7 +211,7 @@ def gimp_render(out_file, ctx: Context):
                 position=str(text_region.xywh[0]) + " " + str(text_region.xywh[1]),
                 size=str(text_region.xywh[2]) + " " + str(text_region.xywh[3]),
                 justify=alignment_to_justification[text_region.alignment],
-                font=font_template.format(n=n, font=text_region.font_family)
+                font=font_template.format(n=n, font=_resolve_font_name(text_region.font_family))
                 if text_region.font_family != ""
                 else "",
                 # rotated text is weird in gimp so we don't do it unless it's over 10 degrees
