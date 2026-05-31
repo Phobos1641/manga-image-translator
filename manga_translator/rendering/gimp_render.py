@@ -21,12 +21,25 @@ direction_to_base_direction = {
     "vr": "TEXT-DIRECTION-TTB-RTL-UPRIGHT",
 }
 
-text_init_template = '( text{n} ( car ( gimp-text-layer-new image "{text}" "{default_font}" {text_size} 0 ) ) )'
-font_template = '( gimp-text-layer-set-font text{n} "{font}" )'
+# GIMP 3.0 changes vs 2.10 (Script-Fu / PDB "v3"), reflected below:
+#   - Fonts are resource OBJECTS now, not strings. A font name must be resolved
+#     with (gimp-font-get-by-name "...") before being passed to text procedures.
+#   - The unit argument of gimp-text-layer-new takes the UNIT-PIXEL constant.
+#   - gimp-image-add-layer was removed; use gimp-image-insert-layer
+#     (image layer parent position). parent 0 = main stack, position 0 = top.
+#   - File procedures take a single filename (GFile), no second "raw" filename.
+#   - gimp-xcf-save / gimp-file-save take a VECTOR of drawables, not one drawable.
+#   - gimp-image-get-layers returns a single array; in the default (v2) dialect
+#     that array is wrapped in a list, so (vector-ref (car ...) 0) gets a layer.
+# This script uses the default (v2) Script-Fu dialect, hence the (car ...) wraps
+# around single-value PDB returns.
+
+text_init_template = '( text{n} ( car ( gimp-text-layer-new image "{text}" ( car ( gimp-font-get-by-name "{default_font}" ) ) {text_size} UNIT-PIXEL ) ) )'
+font_template = '( gimp-text-layer-set-font text{n} ( car ( gimp-font-get-by-name "{font}" ) ) )'
 angle_template = "( gimp-item-transform-rotate text{n} {angle} TRUE 0 0 )"
 
 text_template = """
-    ( gimp-image-add-layer image text{n} 0 )
+    ( gimp-image-insert-layer image text{n} 0 0 )
     ( gimp-text-layer-set-color text{n} (list {color}) )
     ( gimp-item-set-name text{n} "{name}" )
     ( gimp-layer-set-offsets text{n} {position} )
@@ -41,19 +54,21 @@ text_template = """
 """
 
 save_templates = {
-    "xcf": '( gimp-xcf-save RUN-NONINTERACTIVE image background_layer "{out_file}" "{out_file}" )',
-    "psd": '( file-psd-save RUN-NONINTERACTIVE image background_layer "{out_file}" "{out_file}" 0 0 )',
-    "pdf": '( file-pdf-save RUN-NONINTERACTIVE image background_layer "{out_file}" "{out_file}" TRUE TRUE TRUE )',
+    "xcf": '( gimp-xcf-save RUN-NONINTERACTIVE image (vector background_layer) "{out_file}" )',
+    # gimp-file-save picks the exporter from the extension; this is the robust
+    # replacement for the renamed/reworked file-psd-save / file-pdf-save plugins.
+    "psd": '( gimp-file-save RUN-NONINTERACTIVE image (vector background_layer) "{out_file}" )',
+    "pdf": '( gimp-file-save RUN-NONINTERACTIVE image (vector background_layer) "{out_file}" )',
 }
 
 create_mask = '( inpainting ( car ( gimp-file-load-layer RUN-NONINTERACTIVE image "{mask_file}" ) ) )'
-rename_mask = '( gimp-image-add-layer image inpainting 0 ) ( gimp-item-set-name inpainting "mask" )'
+rename_mask = '( gimp-image-insert-layer image inpainting 0 0 ) ( gimp-item-set-name inpainting "mask" )'
 
 script_template = """
 ( let* (
-            ( image ( car ( gimp-file-load RUN-NONINTERACTIVE "{input_file}" "{input_file}" ) ) )
+            ( image ( car ( gimp-file-load RUN-NONINTERACTIVE "{input_file}" ) ) )
             ( layer-list (gimp-image-get-layers image))
-            ( background_layer (car layer-list))
+            ( background_layer (vector-ref (car layer-list) 0))
             {create_mask}
             {text_init}
         )
@@ -63,7 +78,7 @@ script_template = """
     ( gimp-item-set-lock-position background_layer TRUE )
     {text}
     {save}
-    ( gimp-quit 0 )                        
+    ( gimp-quit 0 )
 )"""
 
 
@@ -153,13 +168,13 @@ def gimp_render(out_file, ctx: Context):
 def gimp_console_executable():
     executable = "gimp"
     if platform.system() == "Windows":
-        gimp_dir = os.getenv("LOCALAPPDATA") + "\\Programs\\GIMP 2\\bin\\"
-        executables = glob.glob(gimp_dir + "gimp-console-2.*.exe")
+        gimp_dir = os.getenv("LOCALAPPDATA") + "\\Programs\\GIMP 3\\bin\\"
+        executables = glob.glob(gimp_dir + "gimp-console-3.*.exe")
         if len(executables) > 0:
             return executables[0]
         # may be in program files
-        gimp_dir = os.getenv("ProgramFiles") + "\\GIMP 2\\bin\\"
-        executables = glob.glob(gimp_dir + "gimp-console-2.*.exe")
+        gimp_dir = os.getenv("ProgramFiles") + "\\GIMP 3\\bin\\"
+        executables = glob.glob(gimp_dir + "gimp-console-3.*.exe")
         if len(executables) == 0:
             print("error: gimp not found in directory:", gimp_dir)
             return
@@ -173,7 +188,10 @@ def gimp_batch(script):
     """
     # logging.info("=== Running GIMP script:")
     # result =
+    print('=== Running GIMP script:')
+    print(script)
 
+    print('=== Running GIMP subprocess:')
     result = subprocess.run(
         [gimp_console_executable(), "-i", "-b", script, "-b", "(gimp-quit 0)"],
         stdout=subprocess.PIPE,
