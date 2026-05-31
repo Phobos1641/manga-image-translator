@@ -21,12 +21,29 @@ direction_to_base_direction = {
     "vr": "TEXT-DIRECTION-TTB-RTL-UPRIGHT",
 }
 
-text_init_template = '( text{n} ( car ( gimp-text-layer-new image "{text}" "{default_font}" {text_size} 0 ) ) )'
-font_template = '( gimp-text-layer-set-font text{n} "{font}" )'
+# GIMP 3.0 changes vs 2.10 (Script-Fu / PDB "v3"), reflected below:
+#   - Fonts are resource OBJECTS now, not strings. A font NAME (family name, NOT
+#     a .ttf filename) must be resolved with (gimp-font-get-by-name "...") before
+#     being passed to text procedures. That call returns NULL for an unknown
+#     name, which then makes gimp-text-layer-new fail; resolve-font (defined in
+#     the script below) falls back to the current context font in that case.
+#   - The unit argument of gimp-text-layer-new takes the UNIT-PIXEL constant.
+#   - gimp-image-add-layer was removed; use gimp-image-insert-layer
+#     (image layer parent position). parent 0 = main stack, position 0 = top.
+#   - File procedures take a single filename (GFile), no second "raw" filename.
+#   - The save/export PDB procedures are (run-mode image file): gimp-xcf-save for
+#     .xcf, gimp-file-save (routes by extension) for other formats. No drawable.
+#   - gimp-image-get-layers returns a single array; in the default (v2) dialect
+#     that array is wrapped in a list, so (vector-ref (car ...) 0) gets a layer.
+# This script uses the default (v2) Script-Fu dialect, hence the (car ...) wraps
+# around single-value PDB returns.
+
+text_init_template = '( text{n} ( car ( gimp-text-layer-new image "{text}" ( resolve-font "{default_font}" ) {text_size} UNIT-PIXEL ) ) )'
+font_template = '( gimp-text-layer-set-font text{n} ( resolve-font "{font}" ) )'
 angle_template = "( gimp-item-transform-rotate text{n} {angle} TRUE 0 0 )"
 
 text_template = """
-    ( gimp-image-add-layer image text{n} 0 )
+    ( gimp-image-insert-layer image text{n} 0 0 )
     ( gimp-text-layer-set-color text{n} (list {color}) )
     ( gimp-item-set-name text{n} "{name}" )
     ( gimp-layer-set-offsets text{n} {position} )
@@ -41,19 +58,33 @@ text_template = """
 """
 
 save_templates = {
-    "xcf": '( gimp-xcf-save RUN-NONINTERACTIVE image background_layer "{out_file}" "{out_file}" )',
-    "psd": '( file-psd-save RUN-NONINTERACTIVE image background_layer "{out_file}" "{out_file}" 0 0 )',
-    "pdf": '( file-pdf-save RUN-NONINTERACTIVE image background_layer "{out_file}" "{out_file}" TRUE TRUE TRUE )',
+    # The PDB save/export procedures take (run-mode image file) - NO drawables
+    # vector (the libgimp C wrappers have extra params, but the PDB procedures
+    # do not). gimp-file-save routes to the right exporter by file extension.
+    "xcf": '( gimp-xcf-save RUN-NONINTERACTIVE image "{out_file}" )',
+    "psd": '( gimp-file-save RUN-NONINTERACTIVE image "{out_file}" )',
+    "pdf": '( gimp-file-save RUN-NONINTERACTIVE image "{out_file}" )',
 }
 
 create_mask = '( inpainting ( car ( gimp-file-load-layer RUN-NONINTERACTIVE image "{mask_file}" ) ) )'
-rename_mask = '( gimp-image-add-layer image inpainting 0 ) ( gimp-item-set-name inpainting "mask" )'
+rename_mask = '( gimp-image-insert-layer image inpainting 0 0 ) ( gimp-item-set-name inpainting "mask" )'
 
+# resolve-font turns a font NAME into a font resource, falling back to the
+# current context font when the name does not resolve (gimp-font-get-by-name
+# returns NULL). The check tolerates whichever way this build represents a
+# missing resource (#f, 0 or a negative id); a valid font is always a positive
+# id. Without this a bad font name aborts the whole script.
 script_template = """
+( begin
+( define ( resolve-font name )
+    ( let ( ( f ( car ( gimp-font-get-by-name name ) ) ) )
+        ( if ( and f ( or ( not ( number? f ) ) ( > f 0 ) ) )
+            f
+            ( car ( gimp-context-get-font ) ) ) ) )
 ( let* (
-            ( image ( car ( gimp-file-load RUN-NONINTERACTIVE "{input_file}" "{input_file}" ) ) )
+            ( image ( car ( gimp-file-load RUN-NONINTERACTIVE "{input_file}" ) ) )
             ( layer-list (gimp-image-get-layers image))
-            ( background_layer (car layer-list))
+            ( background_layer (vector-ref (car layer-list) 0))
             {create_mask}
             {text_init}
         )
@@ -63,7 +94,8 @@ script_template = """
     ( gimp-item-set-lock-position background_layer TRUE )
     {text}
     {save}
-    ( gimp-quit 0 )                        
+    ( gimp-quit 0 )
+)
 )"""
 
 
@@ -153,13 +185,13 @@ def gimp_render(out_file, ctx: Context):
 def gimp_console_executable():
     executable = "gimp"
     if platform.system() == "Windows":
-        gimp_dir = os.getenv("LOCALAPPDATA") + "\\Programs\\GIMP 2\\bin\\"
-        executables = glob.glob(gimp_dir + "gimp-console-2.*.exe")
+        gimp_dir = os.getenv("LOCALAPPDATA") + "\\Programs\\GIMP 3\\bin\\"
+        executables = glob.glob(gimp_dir + "gimp-console-3.*.exe")
         if len(executables) > 0:
             return executables[0]
         # may be in program files
-        gimp_dir = os.getenv("ProgramFiles") + "\\GIMP 2\\bin\\"
-        executables = glob.glob(gimp_dir + "gimp-console-2.*.exe")
+        gimp_dir = os.getenv("ProgramFiles") + "\\GIMP 3\\bin\\"
+        executables = glob.glob(gimp_dir + "gimp-console-3.*.exe")
         if len(executables) == 0:
             print("error: gimp not found in directory:", gimp_dir)
             return
@@ -175,7 +207,7 @@ def gimp_batch(script):
     # result =
 
     result = subprocess.run(
-        [gimp_console_executable(), "-i", "-b", script, "-b", "(gimp-quit 0)"],
+        [gimp_console_executable(), "-i", "--batch-interpreter", "plug-in-script-fu-eval", "-b", script, "--quit"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         universal_newlines=True,
