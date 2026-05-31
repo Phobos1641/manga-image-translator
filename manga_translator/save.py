@@ -1,4 +1,6 @@
 import os
+import platform
+import subprocess
 import shutil
 import functools
 from PIL import Image
