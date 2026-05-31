@@ -22,8 +22,11 @@ direction_to_base_direction = {
 }
 
 # GIMP 3.0 changes vs 2.10 (Script-Fu / PDB "v3"), reflected below:
-#   - Fonts are resource OBJECTS now, not strings. A font name must be resolved
-#     with (gimp-font-get-by-name "...") before being passed to text procedures.
+#   - Fonts are resource OBJECTS now, not strings. A font NAME (family name, NOT
+#     a .ttf filename) must be resolved with (gimp-font-get-by-name "...") before
+#     being passed to text procedures. That call returns NULL for an unknown
+#     name, which then makes gimp-text-layer-new fail; resolve-font (defined in
+#     the script below) falls back to the current context font in that case.
 #   - The unit argument of gimp-text-layer-new takes the UNIT-PIXEL constant.
 #   - gimp-image-add-layer was removed; use gimp-image-insert-layer
 #     (image layer parent position). parent 0 = main stack, position 0 = top.
@@ -34,8 +37,8 @@ direction_to_base_direction = {
 # This script uses the default (v2) Script-Fu dialect, hence the (car ...) wraps
 # around single-value PDB returns.
 
-text_init_template = '( text{n} ( car ( gimp-text-layer-new image "{text}" ( car ( gimp-font-get-by-name "{default_font}" ) ) {text_size} UNIT-PIXEL ) ) )'
-font_template = '( gimp-text-layer-set-font text{n} ( car ( gimp-font-get-by-name "{font}" ) ) )'
+text_init_template = '( text{n} ( car ( gimp-text-layer-new image "{text}" ( resolve-font "{default_font}" ) {text_size} UNIT-PIXEL ) ) )'
+font_template = '( gimp-text-layer-set-font text{n} ( resolve-font "{font}" ) )'
 angle_template = "( gimp-item-transform-rotate text{n} {angle} TRUE 0 0 )"
 
 text_template = """
@@ -64,7 +67,18 @@ save_templates = {
 create_mask = '( inpainting ( car ( gimp-file-load-layer RUN-NONINTERACTIVE image "{mask_file}" ) ) )'
 rename_mask = '( gimp-image-insert-layer image inpainting 0 0 ) ( gimp-item-set-name inpainting "mask" )'
 
+# resolve-font turns a font NAME into a font resource, falling back to the
+# current context font when the name does not resolve (gimp-font-get-by-name
+# returns NULL). The check tolerates whichever way this build represents a
+# missing resource (#f, 0 or a negative id); a valid font is always a positive
+# id. Without this a bad font name aborts the whole script.
 script_template = """
+( begin
+( define ( resolve-font name )
+    ( let ( ( f ( car ( gimp-font-get-by-name name ) ) ) )
+        ( if ( and f ( or ( not ( number? f ) ) ( > f 0 ) ) )
+            f
+            ( car ( gimp-context-get-font ) ) ) ) )
 ( let* (
             ( image ( car ( gimp-file-load RUN-NONINTERACTIVE "{input_file}" ) ) )
             ( layer-list (gimp-image-get-layers image))
@@ -79,6 +93,7 @@ script_template = """
     {text}
     {save}
     ( gimp-quit 0 )
+)
 )"""
 
 
@@ -182,22 +197,37 @@ def gimp_console_executable():
     return executable
 
 
-def gimp_batch(script):
+def gimp_batch(script, timeout=300):
     """
-    Run a gimp script in batch mode. Quit gimp after running the script and on errors. Raise an exception if there is a GIMP error.
-    """
-    # logging.info("=== Running GIMP script:")
-    # result =
-    print('=== Running GIMP script:')
-    print(script)
+    Run a gimp script in batch mode. Quit gimp after running the script and on
+    errors. Raise an exception if there is a GIMP error.
 
-    print('=== Running GIMP subprocess:')
-    result = subprocess.run(
-        [gimp_console_executable(), "-i", "-b", script, "-b", "(gimp-quit 0)"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True,
-    )
+    A timeout is enforced because on GIMP 3.0 a Script-Fu error that happens
+    before the script reaches (gimp-quit 0) does NOT make GIMP exit: it keeps
+    running idle as a background process, so this call would otherwise block
+    forever. stdin is also detached so GIMP can never block waiting on it.
+    """
+    try:
+        result = subprocess.run(
+            [gimp_console_executable(), "-i", "-b", script, "-b", "(gimp-quit 0)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        # subprocess.run kills the process on timeout; surface a clear error.
+        print("=== Output")
+        print(e.stdout or "")
+        print("=== Error")
+        print(e.stderr or "")
+        raise Exception(
+            "GIMP did not exit within %ds. This usually means a Script-Fu "
+            "command errored before (gimp-quit 0) was reached - check the GIMP "
+            "output above (a frequent cause is a font name GIMP cannot resolve)."
+            % timeout
+        )
 
     print("=== Output")
     print(result.stdout)
