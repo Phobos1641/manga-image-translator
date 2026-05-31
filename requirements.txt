@@ -61,3 +61,4 @@ rich
 regex
 rusty_manga_image_translator@https://github.com/Phobos1641/manga-image-translator-rust/releases/download/v0.13.2/rusty_manga_image_translator-0.13.2-cp39-abi3-manylinux_2_39_x86_64.whl
 python-bidi
+PySide6
